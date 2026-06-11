@@ -1,0 +1,6 @@
+{
+  "name": "Ecom Network",
+  "description": "Turn Connections Into Commissions. Build your network, grow your e-commerce business, and earn recurring commissions through the next generation of digital entrepreneurship.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
