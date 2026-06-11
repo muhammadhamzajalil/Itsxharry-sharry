@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { DynamicIcon } from "../components/DynamicIcon";
 
 interface RegisterProps {
-  onLoginSuccess: (token: string, user: any) => void;
+  onLoginSuccess: (token: string, user: any, refreshToken?: string) => void;
   navigate: (page: string) => void;
 }
 
@@ -59,7 +59,7 @@ export const Register: React.FC<RegisterProps> = ({ onLoginSuccess, navigate }) 
 
       setSuccess(true);
       setTimeout(() => {
-        onLoginSuccess(data.token, data.user);
+        onLoginSuccess(data.token, data.user, data.refreshToken);
         navigate("dashboard");
       }, 1500);
 

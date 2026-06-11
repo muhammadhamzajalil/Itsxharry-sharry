@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { DynamicIcon } from "../components/DynamicIcon";
 
 interface LoginProps {
-  onLoginSuccess: (token: string, user: any) => void;
+  onLoginSuccess: (token: string, user: any, refreshToken?: string) => void;
   navigate: (page: string) => void;
 }
 
@@ -29,7 +29,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, navigate }) => {
         throw new Error(data.error || "Authentication failed.");
       }
 
-      onLoginSuccess(data.token, data.user);
+      onLoginSuccess(data.token, data.user, data.refreshToken);
       if (data.user.role === "admin") {
         navigate("admin");
       } else {

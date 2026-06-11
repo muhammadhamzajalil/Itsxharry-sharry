@@ -5,8 +5,13 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { YOURMART_CATALOG } from "./yourmart_data";
+import bcryptjs from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET || "ecom-network-ultra-secret-key-2026-06-11";
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "ecom-network-ultra-refresh-secret-key-2026-06-11";
 
 const app = express();
 const PORT = 3000;
@@ -57,6 +62,15 @@ interface User {
   isSuspended: boolean;
   isActivated?: boolean; // For E-Pin user activation verification
   createdAt: string;
+  // Relational Database mapping / storage fields
+  user_id?: string;
+  full_name?: string;
+  phone?: string;
+  password_hash?: string;
+  sponsor_id?: string;
+  status?: string;
+  updated_at?: string;
+  created_at?: string;
 }
 
 interface Product {
@@ -462,6 +476,24 @@ function generatePinCode(existingPins: string[] = []): string {
   return `ECN-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
+// Generate sequential User ID starting at ECN1001
+function generateECNUserId(dbUsers: any[] = []): string {
+  let maxNum = 1000;
+  for (const u of dbUsers) {
+    const uIdToCheck = u.user_id || u.id;
+    if (uIdToCheck && typeof uIdToCheck === "string" && uIdToCheck.toUpperCase().startsWith("ECN")) {
+      const match = uIdToCheck.toUpperCase().match(/^ECN(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+  }
+  return `ECN${maxNum + 1}`;
+}
+
 // Database utility helpers
 function readDB(): DB {
   try {
@@ -776,8 +808,25 @@ function authenticateToken(req: any, res: any, next: any) {
   }
 
   const db = readDB();
-  const userId = token.replace("token-", "");
-  const user = db.users.find((u) => u.id === userId);
+  let userId: string | null = null;
+
+  // Dual validation: Support legacy "token-" formats alongside secure modern JWT verify
+  if (token.startsWith("token-")) {
+    userId = token.replace("token-", "");
+  } else {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      userId = decoded.userId || decoded.id;
+    } catch (err: any) {
+      return res.status(401).json({ error: "Invalid or expired session parameters. Please log in again." });
+    }
+  }
+
+  if (!userId) {
+    return res.status(401).json({ error: "Invalid token structure." });
+  }
+
+  const user = db.users.find((u) => u.id === userId || u.user_id === userId);
 
   if (!user) {
     return res.status(403).json({ error: "Invalid or expired session parameters." });
@@ -804,15 +853,14 @@ function requireAdmin(req: any, res: any, next: any) {
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
-    return res.status(400).json({ error: "Username and password parameters are mandatory." });
+    return res.status(400).json({ error: "Username/Email and password parameters are mandatory." });
   }
 
   const db = readDB();
   const user = db.users.find(
     (u) =>
-      (u.username.toLowerCase() === username.toLowerCase() ||
-        u.email.toLowerCase() === username.toLowerCase()) &&
-      u.password === password
+      u.username.toLowerCase() === username.toLowerCase() ||
+      u.email.toLowerCase() === username.toLowerCase()
   );
 
   if (!user) {
@@ -823,9 +871,33 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(403).json({ error: "This affiliate profile is currently suspended." });
   }
 
-  const token = `token-${user.id}`;
-  const { password: _, ...userWithoutPassword } = user;
-  res.json({ token, user: userWithoutPassword });
+  // Dual Check: Hashed password compare via bcrypt, with plaintext fail-back for legacy seed users
+  let passwordMatches = false;
+  if (user.password_hash) {
+    passwordMatches = bcryptjs.compareSync(password, user.password_hash);
+  } else if (user.password) {
+    passwordMatches = user.password === password;
+  }
+
+  if (!passwordMatches) {
+    return res.status(401).json({ error: "Invalid username/email or password." });
+  }
+
+  // Generate 24 Hours Access Token and 30 Days Refresh Token
+  const token = jwt.sign(
+    { userId: user.id, username: user.username, role: user.role },
+    JWT_SECRET,
+    { expiresIn: "24h" }
+  );
+
+  const refreshToken = jwt.sign(
+    { userId: user.id },
+    JWT_REFRESH_SECRET,
+    { expiresIn: "30d" }
+  );
+
+  const { password: _, password_hash: __, ...userWithoutPassword } = user;
+  res.json({ token, refreshToken, user: userWithoutPassword });
 });
 
 app.post("/api/auth/register", (req, res) => {
@@ -837,39 +909,74 @@ app.post("/api/auth/register", (req, res) => {
   const db = readDB();
   const uLower = username.toLowerCase();
   const eLower = email.toLowerCase();
+  const phoneTrim = mobile.trim();
 
+  // 1. Check Duplicate Username
   if (db.users.some((u) => u.username.toLowerCase() === uLower)) {
     return res.status(400).json({ error: "Username already claimed. Specify another." });
   }
+
+  // 2. Check Duplicate Email
   if (db.users.some((u) => u.email.toLowerCase() === eLower)) {
     return res.status(400).json({ error: "Email already registered. Proceed to login." });
+  }
+
+  // 3. Check Duplicate Phone/Mobile Number
+  if (db.users.some((u) => (u.mobile || u.phone || "").trim() === phoneTrim)) {
+    return res.status(400).json({ error: "Phone number already registered. Specify another." });
   }
 
   // Map Referrer Sponsor code
   let referredByCode: string | undefined = undefined;
   if (referralCode) {
-    const sponsor = db.users.find((u) => u.referralCode.toUpperCase() === referralCode.toUpperCase());
+    const sponsor = db.users.find(
+      (u) =>
+        u.referralCode.toUpperCase() === referralCode.toUpperCase() ||
+        (u.user_id && u.user_id.toUpperCase() === referralCode.toUpperCase())
+    );
     if (!sponsor) {
       return res.status(400).json({ error: "The provided sponsor referral code does not exist." });
     }
     referredByCode = sponsor.referralCode;
   }
 
+  // Generate Automatically:
+  // Sequential Unique format: ECN1001, ECN1002, etc.
+  const sequentialUserId = generateECNUserId(db.users);
+  const surrogateId = "u-" + Math.random().toString(36).substr(2, 9);
+  const userRefCode = username.toUpperCase() + Math.floor(100 + Math.random() * 900);
+
+  // Secure Password Hashing with exactly 12 rounds (never store plaintext)
+  const salt = bcryptjs.genSaltSync(12);
+  const hashed_password = bcryptjs.hashSync(password, salt);
+
+  const timestamp = new Date().toISOString();
+
   const newUser: User = {
-    id: "u-" + Math.random().toString(36).substr(2, 9),
+    id: surrogateId,
     name,
     username,
     email,
     mobile,
     country: country || "Pakistan",
-    password,
-    referralCode: username.toUpperCase() + Math.floor(100 + Math.random() * 900),
+    referralCode: userRefCode,
     referredBy: referredByCode,
     role: "user",
     rank: "Starter",
     isSuspended: false,
     isActivated: false, // New members are "Pending Activation"
-    createdAt: new Date().toISOString()
+    createdAt: timestamp,
+    
+    // Relational Database columns
+    user_id: sequentialUserId,
+    full_name: name,
+    phone: mobile,
+    password_hash: hashed_password,
+    sponsor_id: referredByCode,
+    position: "left", // Default placement position in MLM tree
+    status: "pending", // active, suspended, pending
+    created_at: timestamp,
+    updated_at: timestamp
   };
 
   db.users.push(newUser);
@@ -880,17 +987,62 @@ app.post("/api/auth/register", (req, res) => {
     id: "n-" + Math.random().toString(36).substr(2, 9),
     userId: newUser.id,
     title: "Welcome to Ecom Network! (Pending Activation)",
-    message: "Welcome! Your affiliate office is pending activation. Please purchase an E-Pin (Rs. 950) or request one from your sponsor to activate your profile, claim dropshipping checkouts, and build your earnings tree.",
+    message: `Welcome! Your partner office has been configured successfully. Your unique User ID is ${sequentialUserId}. Please purchase or request an E-Pin to activate your profile and unlock commission nodes.`,
     type: "referral",
     isRead: false,
-    createdAt: new Date().toISOString()
+    createdAt: timestamp
   });
 
   writeDB(db);
 
-  const token = `token-${newUser.id}`;
-  const { password: _, ...userWithoutPassword } = newUser;
-  res.status(201).json({ token, user: userWithoutPassword });
+  // Auto-login upon registration: Generate JWT tokens immediately
+  const token = jwt.sign(
+    { userId: newUser.id, username: newUser.username, role: newUser.role },
+    JWT_SECRET,
+    { expiresIn: "24h" }
+  );
+
+  const refreshToken = jwt.sign(
+    { userId: newUser.id },
+    JWT_REFRESH_SECRET,
+    { expiresIn: "30d" }
+  );
+
+  const { password: _, password_hash: __, ...userWithoutPassword } = newUser;
+  res.status(201).json({ token, refreshToken, user: userWithoutPassword });
+});
+
+// Endpoint to handle token refreshes (Auto refresh sessions)
+app.post("/api/auth/refresh", (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(400).json({ error: "Refresh token is mandatory." });
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as any;
+    const db = readDB();
+    const user = db.users.find((u) => u.id === decoded.userId || u.user_id === decoded.userId);
+
+    if (!user) {
+      return res.status(403).json({ error: "User profile from token context not identified." });
+    }
+
+    if (user.isSuspended) {
+      return res.status(403).json({ error: "This affiliate profile is suspended." });
+    }
+
+    // Sign new 24-hour Access Token
+    const newAccessToken = jwt.sign(
+      { userId: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({ token: newAccessToken });
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid or expired refresh token." });
+  }
 });
 
 // GET USER IDENTITY DETAILS & SUMMARY STATISTICS
@@ -2083,7 +2235,19 @@ app.get("/api/admin/analytics", authenticateToken, requireAdmin, (req, res) => {
       totalWithdrawalsSettled: totalClearedWithdrawals,
       totalCommissionsPaid: db.commissions.filter((c) => c.status === "Approved").reduce((sum, c) => sum + c.amount, 0)
     },
-    users: db.users.map((u) => ({ id: u.id, name: u.name, username: u.username, email: u.email, mobile: u.mobile, country: u.country, rank: u.rank, role: u.role, status: u.isSuspended ? "suspended" : "active" })),
+    users: db.users.map((u: any) => ({
+      id: u.id,
+      user_id: u.user_id || u.id,
+      name: u.full_name || u.name,
+      username: u.username,
+      email: u.email,
+      mobile: u.phone || u.mobile,
+      country: u.country,
+      rank: u.rank,
+      role: u.role,
+      status: u.isSuspended ? "suspended" : (u.isActivated ? "active" : "pending"),
+      createdAt: u.created_at || u.createdAt
+    })),
     orders: db.orders,
     withdrawals: db.withdrawals,
     commissions: db.commissions,

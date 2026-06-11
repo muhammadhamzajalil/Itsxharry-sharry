@@ -574,11 +574,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ token, navigate }) => {
                   <table className="w-full text-left font-mono text-xs text-gray-700">
                     <thead>
                       <tr className="border-b border-gray-200 text-gray-400 uppercase text-[9px] tracking-widest font-bold">
-                        <th className="py-3">Member ID</th>
+                        <th className="py-3">User ID</th>
+                        <th className="py-3">Name</th>
                         <th className="py-3">Username</th>
-                        <th className="py-3">Email Coordinate</th>
-                        <th className="py-3">Mobile Contact</th>
-                        <th className="py-3">Tiers Rank</th>
+                        <th className="py-3">Email</th>
+                        <th className="py-3">Phone</th>
+                        <th className="py-3">Registration Date</th>
                         <th className="py-3">Status</th>
                         <th className="py-3 text-right">Administrative</th>
                       </tr>
@@ -586,19 +587,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ token, navigate }) => {
                     <tbody className="divide-y divide-gray-100/60 font-medium">
                       {users.map((u: any) => (
                         <tr key={u.id} className="hover:bg-gray-50/50">
-                          <td className="py-3 text-gray-400">#{u.id}</td>
-                          <td className="py-3 font-semibold text-gray-900">
-                            @{u.username}
-                            <span className="block text-[10px] text-gray-500 font-normal">{u.name} ({u.country})</span>
-                          </td>
+                          <td className="py-3 font-bold text-gray-900">{u.user_id || u.id}</td>
+                          <td className="py-3 text-gray-800">{u.name}</td>
+                          <td className="py-3 font-semibold text-[#0B7A33]">@{u.username}</td>
                           <td className="py-3 text-gray-500">{u.email}</td>
-                          <td className="py-3 text-gray-500">{u.mobile}</td>
-                          <td className="py-3 font-bold text-[#0B7A33] uppercase">{u.role === "admin" ? "Super Admin" : u.rank}</td>
+                          <td className="py-3 text-gray-500">{u.mobile || u.phone || "N/A"}</td>
+                          <td className="py-3 text-gray-400">
+                            {u.createdAt ? new Date(u.createdAt).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            }) : "N/A"}
+                          </td>
                           <td className="py-3 font-bold">
                             <span className={`px-2.5 py-0.5 rounded text-[10px] border ${
-                              u.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-red-50 text-red-650 border-red-100"
+                              u.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                              u.status === "pending" ? "bg-amber-50 text-amber-700 border-amber-100" :
+                              "bg-red-50 text-red-650 border-red-100"
                             }`}>
-                              {u.status.toUpperCase()}
+                              {u.status ? u.status.toUpperCase() : "PENDING"}
                             </span>
                           </td>
                           <td className="py-3 text-right">

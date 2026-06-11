@@ -46,6 +46,10 @@ export default function App() {
     return localStorage.getItem("ecom-network-token") || null;
   });
 
+  const [refreshToken, setRefreshToken] = useState<string | null>(() => {
+    return localStorage.getItem("ecom-network-refresh-token") || null;
+  });
+
   const [user, setUser] = useState<any>(() => {
     const storedUser = localStorage.getItem("ecom-network-user");
     try {
@@ -54,6 +58,35 @@ export default function App() {
       return null;
     }
   });
+
+  // Client-side auto-refresh session routine: Automatically gets fresh Access Token using stored Refresh Token
+  useEffect(() => {
+    const storedRefreshToken = localStorage.getItem("ecom-network-refresh-token");
+    if (storedRefreshToken) {
+      fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: storedRefreshToken })
+      })
+      .then(res => {
+        if (res.ok) {
+          return res.json();
+        } else {
+          throw new Error("Expired refresh token");
+        }
+      })
+      .then(data => {
+        if (data.token) {
+          setToken(data.token);
+          localStorage.setItem("ecom-network-token", data.token);
+        }
+      })
+      .catch(() => {
+        // Clear expired credentials
+        handleLogout();
+      });
+    }
+  }, []);
 
   const toggleTheme = () => {
     setIsDark((prev) => {
@@ -87,19 +120,26 @@ export default function App() {
   };
 
   // On Login/Register success callback
-  const handleLoginSuccess = (newToken: string, newUser: any) => {
+  const handleLoginSuccess = (newToken: string, newUser: any, newRefreshToken?: string) => {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem("ecom-network-token", newToken);
     localStorage.setItem("ecom-network-user", JSON.stringify(newUser));
+    
+    if (newRefreshToken) {
+      setRefreshToken(newRefreshToken);
+      localStorage.setItem("ecom-network-refresh-token", newRefreshToken);
+    }
   };
 
   // On Logout callback
   const handleLogout = () => {
     setToken(null);
     setUser(null);
+    setRefreshToken(null);
     localStorage.removeItem("ecom-network-token");
     localStorage.removeItem("ecom-network-user");
+    localStorage.removeItem("ecom-network-refresh-token");
     navigate("home");
   };
 
